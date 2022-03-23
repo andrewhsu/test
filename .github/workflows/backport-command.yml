@@ -54,7 +54,7 @@ jobs:
 
       - name: Create issue
         run: |
-          gh issue create --title "Backport ${{ toJson(github.event.client_payload.github.payload.issue.title) }} to ${{ steps.branch.outputs.branch }}" \
+          gh issue create --title "${{ format('[{0}] {1}', steps.branch.outputs.branch, fromJSON(github.event.client_payload.github.payload.issue.title)) }}" \
             --repo ${{ toJson(github.event.client_payload.slash_command.args.named.org) }}/${{ toJson(github.event.client_payload.slash_command.args.named.repo) }} \
             --assignee "${{ steps.assignees.outputs.assignees }}" \
             --milestone "${{ steps.milestone.outputs.milestone }}" \
