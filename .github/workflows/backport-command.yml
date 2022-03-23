@@ -14,14 +14,6 @@ jobs:
           sudo apt install gh
           gh auth login --with-token <<< "${{ secrets.ACTIONS_BOT_TOKEN }}"
 
-      - name: Add reaction
-        uses: peter-evans/create-or-update-comment@v1
-        with:
-          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
-          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
-          comment-id: ${{ github.event.client_payload.github.payload.comment.id }}
-          reaction-type: hooray
-
       - name: Get assignees
         env:
           ASSIGNEES: ${{ toJson(github.event.client_payload.github.payload.issue.assignees) }}
@@ -61,3 +53,11 @@ jobs:
             --assignee "${{ steps.assignees.outputs.assignees }}" \
             --milestone "${{ steps.milestone.outputs.milestone }}" \
             --body "issue: ${{ toJson(github.event.client_payload.github.payload.comment.issue_url) }}"
+
+      - name: Add reaction
+        uses: peter-evans/create-or-update-comment@v1
+        with:
+          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+          comment-id: ${{ github.event.client_payload.github.payload.comment.id }}
+          reaction-type: hooray
