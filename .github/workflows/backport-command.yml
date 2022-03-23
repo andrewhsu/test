@@ -48,8 +48,12 @@ jobs:
         env:
           TARGET_BRANCH: ${{ steps.branch.outputs.branch }}
           ORIG_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
+          GITHUB_ORG: ${{ github.event.client_payload.slash_command.args.named.org }}
+          GITHUB_REPO: ${{ github.event.client_payload.slash_command.args.named.repo }}
         run: |
-          gh issue create --title "[$TARGET_BRANCH] $ORIG_TITLE" \
+          gh issue create \
+            --repo "$GITHUB_ORG/$GITHUB_REPO" \
+            --title "[$TARGET_BRANCH] $ORIG_TITLE" \
             --assignee "${{ steps.assignees.outputs.assignees }}" \
             --milestone "${{ steps.milestone.outputs.milestone }}" \
             --body "issue: ${{ toJson(github.event.client_payload.github.payload.comment.issue_url) }}"
