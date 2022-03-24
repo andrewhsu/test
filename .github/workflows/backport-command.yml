@@ -23,7 +23,6 @@ jobs:
         run: |
           branches=$(gh api "/repos/${TARGET_ORG}/${TARGET_REPO}/branches" --jq .[].name | grep "$BRANCH")
           if [[ $branches == "" ]]; then
-            echo "ERROR branch $BRANCH not found"
             exit 2
           fi
           echo ::set-output name=branch::"$BRANCH"
@@ -56,13 +55,13 @@ jobs:
           BACKPORT_BRANCH: ${{ steps.branch.outputs.branch }}
           ORIG_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
           ORIG_ASSIGNEES: ${{ steps.assignees.outputs.assignees }}
-          ORIG_ISSUE_URL: ${{ github.event.client_payload.github.payload.comment.issue_url }}
+          ORIG_ISSUE_URL: ${{ github.event.client_payload.github.payload.comment.html_url }}
         run: |
-          gh issue create --title "[${BACKPORT_BRANCH}] Backport ${ORIG_TITLE} to ${BACKPORT_BRANCH}" \
+          gh issue create --title "[${BACKPORT_BRANCH}] ${ORIG_TITLE}" \
             --repo "${TARGET_ORG}/${TARGET_REPO}" \
             --assignee "${ORIG_ASSIGNEES}" \
             --milestone "${TARGET_MILESTONE}" \
-            --body "issue: ${ORIG_ISSUE_URL}"
+            --body "Backport ${ORIG_ISSUE_URL} to branch ${BACKPORT_BRANCH}"
 
       - name: Add reaction
         uses: peter-evans/create-or-update-comment@v1
