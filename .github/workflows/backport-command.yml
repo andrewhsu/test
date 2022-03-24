@@ -23,6 +23,7 @@ jobs:
         run: |
           branches=$(gh api "/repos/${TARGET_ORG}/${TARGET_REPO}/branches" --jq .[].name | grep "$BRANCH")
           if [[ $branches == "" ]]; then
+            echo "ERROR branch $BRANCH not found"
             exit 2
           fi
           echo ::set-output name=branch::"$BRANCH"
