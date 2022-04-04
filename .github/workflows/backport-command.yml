@@ -3,7 +3,60 @@ on:
   repository_dispatch:
     types: [backport-command]
 jobs:
-  backport:
+  # outputs the backport type (create PR or issue)
+  # outputs the source of the comment (PR or issue)
+  backport-type:
+    outputs:
+      type: ${{ steps.type.outputs.type }}
+      commented_on: ${{ steps.type.outputs.commented_on }}
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ORG: ${{ github.event.client_payload.slash_command.args.named.org }}
+      TARGET_REPO: ${{ github.event.client_payload.slash_command.args.named.repo }}
+    steps:
+      - name: Get type of backport (issue or PR)
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          ARG1: ${{ github.event.client_payload.slash_command.args.unnamed.arg1 }}
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        id: type
+        run: |
+          if [[ $(echo $CLIENT_PAYLOAD | jq 'has("pull_request")') == true ]]; then
+            commented_on=pr
+          else
+            commented_on=issue
+          fi
+          echo "::set-output name=commented_on::$commented_on"
+          branches=$(gh api "/repos/${TARGET_ORG}/${TARGET_REPO}/branches" --jq '.[] | select(.name=='\"$ARG1\"')')
+          if [[ $branches == "" ]]; then
+            # not a branch; checking if its a PR
+            pulls=$(gh api "repos/${TARGET_ORG}/${TARGET_REPO}/pulls/$ARG1" --jq '. | select(.state=="closed")')
+            if [[ $pulls == "" ]]; then
+              echo "The provided argument is neither branch nor a pr"
+              exit 2
+            else
+              # case valid PR number
+              if [[ "$commented_on" == "pr" ]]; then
+                echo "Provided PR number in PR comment. You should use PR numbers only on issue somments"
+                exit 2
+              else
+                echo "::set-output name=type::pr"
+              fi
+            fi
+          else
+            # case valid branch name
+            # this case applies for both creating issue and PRs
+            # thus it is accepted in any case
+            echo "::set-output name=type::branch"
+          fi
+
+  # creates backport issue if commented on issue, or
+  # creates backport PR if commented on PR
+  # eg /backport v21.11.x
+  # TODO: add functionality to create PRs when commenting on issues
+  type-branch:
+    needs: backport-type
+    if: needs.backport-type.outputs.type == 'branch'
     runs-on: ubuntu-latest
     env:
       TARGET_ORG: ${{ github.event.client_payload.slash_command.args.named.org }}
@@ -49,19 +102,172 @@ jobs:
           echo ::set-output name=milestone::${assigne_milestone}
 
       - name: Create issue
+        if: needs.backport-type.outputs.commented_on == 'issue'
         env:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
           TARGET_MILESTONE: ${{ steps.milestone.outputs.milestone }}
           BACKPORT_BRANCH: ${{ steps.branch.outputs.branch }}
           ORIG_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
           ORIG_ASSIGNEES: ${{ steps.assignees.outputs.assignees }}
-          ORIG_ISSUE_URL: ${{ github.event.client_payload.github.payload.comment.html_url }}
+          ORIG_COMMENT_URL: ${{ github.event.client_payload.github.payload.comment.html_url }}
         run: |
           gh issue create --title "[${BACKPORT_BRANCH}] ${ORIG_TITLE}" \
             --repo "${TARGET_ORG}/${TARGET_REPO}" \
             --assignee "${ORIG_ASSIGNEES}" \
             --milestone "${TARGET_MILESTONE}" \
-            --body "Backport ${ORIG_ISSUE_URL} to branch ${BACKPORT_BRANCH}"
+            --body "Backport ${ORIG_COMMENT_URL} to branch ${BACKPORT_BRANCH}"
+
+      - name: Get commits of PR
+        if: needs.backport-type.outputs.commented_on == 'pr'
+        env:
+          BACKPORT_PR_NUMBER: ${{ github.event.client_payload.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+        id: backport_commits
+        run: |
+          backport_commits=$(gh api "repos/$TARGET_ORG/$TARGET_REPO/pulls/$BACKPORT_PR_NUMBER/commits" --jq .[].sha | paste -s -d ' ' -)
+          echo ::set-output name=backport_commits::$backport_commits
+
+      - uses: actions/checkout@v3
+        if: needs.backport-type.outputs.commented_on == 'pr'
+        with:
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+
+      - name: Create pull request
+        if: needs.backport-type.outputs.commented_on == 'pr'
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          TARGET_MILESTONE: ${{ steps.milestone.outputs.milestone }}
+          BACKPORT_BRANCH: ${{ steps.branch.outputs.branch }}
+          ORIG_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
+          ORIG_ASSIGNEES: ${{ steps.assignees.outputs.assignees }}
+          ORIG_COMMENT_URL: ${{ github.event.client_payload.github.payload.comment.html_url }}
+          IS_MERGED: ${{ github.event.client_payload.pull_request.merged }}
+          BACKPORT_COMMITS: ${{ steps.backport_commits.outputs.backport_commits }}
+        run: |
+          if [[ "$IS_MERGED" != true ]]; then
+            echo "The pull request is not merged yet. Cancelling..."
+            exit 1
+          fi
+          # ensure unique branch
+          suffix=$(echo $(($RANDOM % 1000)))
+          git fetch
+          git remote -vv
+          git config --global user.email "vbot@vectorized.io"
+          git config --global user.name "vbotbuildovich"
+          branch_name=$(echo "backport-$ORIG_TITLE-to-$BACKPORT_BRANCH-$suffix" | sed 's/ /-/g')
+          issue_number=$(gh issue list --repo "${TARGET_ORG}/${TARGET_REPO}" \
+            --state open \
+            --search "[${BACKPORT_BRANCH}] ${ORIG_TITLE} in:title" \
+            --json number \
+            --milestone "${TARGET_MILESTONE}" \
+            --jq '.[0].number')
+          git checkout -b $branch_name remotes/origin/$BACKPORT_BRANCH
+          git cherry-pick -x $BACKPORT_COMMITS
+          git push --set-upstream origin $branch_name
+          gh pr create --title "[${BACKPORT_BRANCH}] ${ORIG_TITLE}" \
+            --base "${BACKPORT_BRANCH}" \
+            --draft \
+            --repo "${TARGET_ORG}/${TARGET_REPO}" \
+            --assignee "${ORIG_ASSIGNEES}" \
+            --milestone "${TARGET_MILESTONE}" \
+            --body """Backport from pull request: ${ORIG_COMMENT_URL}
+            Fixes $issue_number
+            """
+
+      - name: Add reaction
+        uses: peter-evans/create-or-update-comment@v1
+        with:
+          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+          comment-id: ${{ github.event.client_payload.github.payload.comment.id }}
+          reaction-type: hooray
+
+  # works ONLY on backport issue comments. creates the backport PR
+  # eg /backport 123
+  type-pr:
+    needs: backport-type
+    if: needs.backport-type.outputs.type == 'pr'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ORG: ${{ github.event.client_payload.slash_command.args.named.org }}
+      TARGET_REPO: ${{ github.event.client_payload.slash_command.args.named.repo }}
+    steps:
+      - name: Get assignees
+        env:
+          ASSIGNEES: ${{ toJson(github.event.client_payload.github.payload.issue.assignees) }}
+        id: assignees
+        run: echo ::set-output name=assignees::$(echo "$ASSIGNEES" | jq -r '.[].login' | paste -s -d ',' -)
+
+      - name: Discover branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
+        id: branch
+        run: |
+          backport_branch=$(echo $ISSUE_TITLE | grep -Eo '^(\[.*\])' | tr -d '[]')
+          branches=$(gh api "/repos/${TARGET_ORG}/${TARGET_REPO}/branches" --jq .[].name | grep "$backport_branch")
+          if [[ $branches == "" ]]; then
+            exit 2
+          fi
+          echo ::set-output name=branch::"$backport_branch"
+
+      - name: Discover milestone
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          BACKPORT_BRANCH: ${{ steps.branch.outputs.branch }}
+          ISSUE_NUMBER: ${{ github.event.client_payload.github.payload.issue.number }}
+        id: milestone
+        run: |
+          milestone=$(gh api "/repos/${TARGET_ORG}/${TARGET_REPO}/issues/$ISSUE_NUMBER" --jq .milestone.title)
+          if [[ $milestone == "" ]]; then
+            echo "No milestone found on the issue"
+            exit 2
+          fi
+          echo ::set-output name=milestone::$milestone
+
+      - name: Get commits of PR
+        env:
+          BACKPORT_PR_NUMBER: ${{ github.event.client_payload.slash_command.args.unnamed.arg1 }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+        id: backport_commits
+        run: |
+          backport_commits=$(gh api "repos/$TARGET_ORG/$TARGET_REPO/pulls/$BACKPORT_PR_NUMBER/commits" --jq .[].sha | paste -s -d ' ' -)
+          echo ::set-output name=backport_commits::$backport_commits
+
+      - uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+
+      - name: Create pull request
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          TARGET_MILESTONE: ${{ steps.milestone.outputs.milestone }}
+          BACKPORT_BRANCH: ${{ steps.branch.outputs.branch }}
+          ORIG_TITLE: ${{ github.event.client_payload.github.payload.issue.title }}
+          ORIG_ASSIGNEES: ${{ steps.assignees.outputs.assignees }}
+          ORIG_COMMENT_URL: ${{ github.event.client_payload.github.payload.comment.html_url }}
+          BACKPORT_COMMITS: ${{ steps.backport_commits.outputs.backport_commits }}
+          ORIG_ISSUE_URL: ${{ github.event.client_payload.github.payload.issue.html_url }}
+        run: |
+          # ensure unique branch
+          suffix=$(echo $(($RANDOM % 1000)))
+          git fetch
+          git remote -vv
+          git config --global user.email "vbot@vectorized.io"
+          git config --global user.name "vbotbuildovich"
+          branch_name=$(echo "backport-$ORIG_TITLE-to-$BACKPORT_BRANCH-$suffix" | sed 's/ /-/g' | tr -d '[]')
+          git checkout -b $branch_name remotes/origin/$BACKPORT_BRANCH
+          git cherry-pick -x $BACKPORT_COMMITS
+          git push --set-upstream origin $branch_name
+          gh pr create --title "${ORIG_TITLE}" \
+            --base "${BACKPORT_BRANCH}" \
+            --draft \
+            --repo "${TARGET_ORG}/${TARGET_REPO}" \
+            --assignee "${ORIG_ASSIGNEES}" \
+            --milestone "${TARGET_MILESTONE}" \
+            --body """Backport from pull request: ${ORIG_COMMENT_URL}
+            Fixes $ORIG_ISSUE_URL
+            """
 
       - name: Add reaction
         uses: peter-evans/create-or-update-comment@v1
