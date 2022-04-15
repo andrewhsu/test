@@ -130,7 +130,7 @@ jobs:
       - uses: actions/checkout@v3
         if: needs.backport-type.outputs.commented_on == 'pr'
         with:
-          repository: vbotbuildovich/redpanda
+          repository: andrewhsu/test
           token: ${{ secrets.ACTIONS_BOT_TOKEN }}
 
       - name: Backport commits and get details
@@ -169,7 +169,7 @@ jobs:
           git config --global user.name "vbotbuildovich"
           git remote add upstream "https://github.com/$TARGET_ORG/$TARGET_REPO.git"
           git fetch --all
-          git remote set-url origin "https://vbotbuildovich:$GITHUB_TOKEN@github.com/vbotbuildovich/$TARGET_REPO.git"
+          git remote set-url origin "https://andrewhsu:$GITHUB_TOKEN@github.com/andrewhsu/$TARGET_REPO.git"
           head_branch=$(echo "backport-$ORIG_TITLE-to-$BACKPORT_BRANCH-$suffix" | sed 's/ /-/g' | tr -d '[]')
           git checkout -b $head_branch remotes/upstream/$BACKPORT_BRANCH
           set +e
@@ -250,7 +250,7 @@ jobs:
           gh pr create --title "[${BACKPORT_BRANCH}] ${ORIG_TITLE}" \
             --base "${BACKPORT_BRANCH}" \
             --label "kind/backport" \
-            --head "vbotbuildovich:${HEAD_BRANCH}" \
+            --head "andrewhsu:${HEAD_BRANCH}" \
             --draft \
             --repo "${TARGET_ORG}/${TARGET_REPO}" \
             --reviewer "${ORIG_REVIEWERS}" \
