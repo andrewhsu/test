@@ -36,6 +36,10 @@ jobs:
         run: |
           if [[ "${TARGET_MILESTONE}" == "auto" ]]; then
             major=$(echo "$BACKPORT_BRANCH" | grep -Eo '^v[0-9]{2}\.[0-9]{1,2}\.')
+            if [[ -z $major ]]; then
+              echo "ERROR Unable to get major release prefix from $BACKPORT_BRANCH"
+              exit 2
+            fi
             set +e
             set -o pipefail
             latest_released=$(gh api "repos/${TARGET_ORG}/${TARGET_REPO}/releases" --jq '.[] | select(.draft==false).name'  | grep "${major}" | head -1)
