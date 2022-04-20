@@ -40,7 +40,7 @@ jobs:
               echo "ERROR Unable to get major release prefix from $BACKPORT_BRANCH"
               exit 2
             fi
-            list_released=$(gh api "reposx/${TARGET_ORG}/${TARGET_REPO}/releases" --jq '.[] | select(.draft==false).name')
+            list_released=$(gh api "repos/${TARGET_ORG}/${TARGET_REPO}/releases" --jq '.[] | select(.draft==false).name')
             latest_released=$(echo "$list_released" | grep -m1 -F "${major}" || true)
             if [[ -z $latest_released ]]; then
               echo "INFO no previous releases found with major prefix $major"
